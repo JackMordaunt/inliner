@@ -145,10 +145,23 @@ where
                     // Parse child nodes until we hit the close tag ("</").
                     self.advance();
                     let mut children = vec![];
-                    while !(self.current.kind == Kind::LeftArrow
-                        && self.expect(Kind::Slash).is_ok())
-                    {
-                        children.push(self.parse_node()?);
+                    // Handle script tag which cannot have node children.
+                    if tag == "script" {
+                        let mut text = String::new();
+                        while !(self.current(Kind::LeftArrow).is_ok()
+                            && self.expect(Kind::Slash).is_ok())
+                        {
+                            text.push(self.current.literal);
+                            self.advance();
+                        }
+                        self.advance();
+                        children.push(Node::Text(text));
+                    } else {
+                        while !(self.current(Kind::LeftArrow).is_ok()
+                            && self.expect(Kind::Slash).is_ok())
+                        {
+                            children.push(self.parse_node()?);
+                        }
                     }
                     for _ in 0..tag.len() + 3 {
                         self.advance();
@@ -162,6 +175,8 @@ where
             }
             _ => {
                 let mut text = self.current.literal.to_string();
+                // FIXME: Allow for left arrow to appear in text if followed by
+                // whitespace.
                 while self.expect(Kind::LeftArrow).is_err() {
                     self.advance();
                     text.push(self.current.literal);
@@ -230,6 +245,15 @@ mod tests {
     #[test]
     fn tag() {
         let tests = vec![
+            (
+                "script containing left arrow",
+                r#"<script>if (1 < 2) {alert("hi");}</script>"#,
+                vec![Node::Tag {
+                    name: "script".into(),
+                    attributes: HashMap::new(),
+                    children: vec![Node::Text(r#"if (1 < 2) {alert("hi");}"#.into())],
+                }],
+            ),
             (
                 "minimal",
                 "<tag/>",
