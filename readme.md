@@ -2,7 +2,7 @@
 
 > Create a self contained html file that can be displayed correctly in a browser.
 
-- [ ] Parse valid html text input into a tree structure.
+- [x] Parse valid html text input into a tree structure.
 - [ ] Replace all links with the content of the linked resource.
 - [ ] Render new html with inlined content.
 
