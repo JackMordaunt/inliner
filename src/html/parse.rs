@@ -122,8 +122,10 @@ where
                                     self.advance();
                                     value.push(self.current.literal);
                                 }
-                                self.advance();
-                                self.advance();
+                                self.advance(); // onto quote
+                                                // self.advance(); // onto >
+                                                // self.advance(); // onto <
+
                                 attributes.insert(attr, value);
                             } else {
                                 attributes.insert(attr, "".to_string());
@@ -143,7 +145,8 @@ where
                     })
                 } else {
                     // Parse child nodes until we hit the close tag ("</").
-                    self.advance();
+                    // self.advance();
+                    // self.advance();
                     let mut children = vec![];
                     // Handle script tag which cannot have node children.
                     if tag == "script" {
@@ -155,7 +158,9 @@ where
                             self.advance();
                         }
                         self.advance();
-                        children.push(Node::Text(text));
+                        if !text.is_empty() {
+                            children.push(Node::Text(text));
+                        }
                     } else {
                         while !(self.current(Kind::LeftArrow).is_ok()
                             && self.expect(Kind::Slash).is_ok())
@@ -309,7 +314,19 @@ mod tests {
                 }],
             ),
             (
-                "value attributes",
+                "value attributes, space after last attribute",
+                r#"<tag one="foo" two="foo" three="foo" />"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: [("one", "foo"), ("two", "foo"), ("three", "foo")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    children: vec![],
+                }],
+            ),
+            (
+                "value attributes, self closing",
                 r#"<tag one="foo" two="foo" three="foo"/>"#,
                 vec![Node::Tag {
                     name: "tag".into(),
@@ -321,8 +338,8 @@ mod tests {
                 }],
             ),
             (
-                "value attributes, space after last attribute",
-                r#"<tag one="foo" two="foo" three="foo" />"#,
+                "value attributes, not self closing",
+                r#"<tag one="foo" two="foo" three="foo"></tag>"#,
                 vec![Node::Tag {
                     name: "tag".into(),
                     attributes: [("one", "foo"), ("two", "foo"), ("three", "foo")]
