@@ -17,6 +17,7 @@ pub enum Node {
         attributes: HashMap<String, String>,
         children: Vec<Node>,
     },
+    DocType,
 }
 
 /// Parser maintains state required for parsing.
@@ -90,6 +91,13 @@ where
                     tag.push(self.current.literal);
                 }
                 self.advance();
+                if tag.starts_with('!') {
+                    while self.current(Kind::RightArrow).is_err() {
+                        self.advance();
+                    }
+                    self.advance();
+                    return Ok(Node::DocType);
+                }
                 self.eat_whitespace();
                 let mut attributes = HashMap::new();
                 if self.current(Kind::RightArrow).is_err() {
@@ -183,6 +191,7 @@ impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             Node::Text(text) => write!(f, "{}", text),
+            Node::DocType => write!(f, "<!DOCTYPE html>"),
             Node::Tag {
                 name,
                 attributes,
@@ -379,6 +388,7 @@ mod tests {
                     }],
                 }],
             ),
+            ("doctype", r#"<!DOCTYPE html>"#, vec![Node::DocType]),
         ];
         for (desc, input, want) in tests {
             let got = Parser::new(Tokenizer::from(input.chars()))
