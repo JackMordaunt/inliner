@@ -90,35 +90,41 @@ where
                     tag.push(self.current.literal);
                 }
                 self.advance();
+                self.eat_whitespace();
                 let mut attributes = HashMap::new();
-                while self.expect(Kind::RightArrow).is_err() && self.expect(Kind::Slash).is_err() {
-                    self.eat_whitespace();
-                    // Parse attributes.
-                    let mut attr = self.current.literal.to_string();
-                    while self.expect(Kind::Text).is_ok() {
+                if self.current(Kind::RightArrow).is_err() {
+                    while self.expect(Kind::RightArrow).is_err()
+                        && self.expect(Kind::Slash).is_err()
+                    {
+                        self.eat_whitespace();
+                        // Parse attributes.
+                        let mut attr = self.current.literal.to_string();
+                        while self.expect(Kind::Text).is_ok() {
+                            self.advance();
+                            attr.push(self.current.literal);
+                        }
                         self.advance();
-                        attr.push(self.current.literal);
-                    }
-                    self.advance();
-                    if !attr.is_empty() {
-                        // Check for value.
-                        if self.current(Kind::Equal).is_ok() && self.expect(Kind::Quote).is_ok() {
-                            self.advance();
-                            let mut value = String::new();
-                            while self.expect(Kind::Quote).is_err() {
+                        if !attr.is_empty() {
+                            // Check for value.
+                            if self.current(Kind::Equal).is_ok() && self.expect(Kind::Quote).is_ok()
+                            {
                                 self.advance();
-                                value.push(self.current.literal);
+                                let mut value = String::new();
+                                while self.expect(Kind::Quote).is_err() {
+                                    self.advance();
+                                    value.push(self.current.literal);
+                                }
+                                self.advance();
+                                self.advance();
+                                attributes.insert(attr, value);
+                            } else {
+                                attributes.insert(attr, "".to_string());
                             }
-                            self.advance();
-                            self.advance();
-                            attributes.insert(attr, value);
-                        } else {
-                            attributes.insert(attr, "".to_string());
                         }
                     }
                 }
                 self.eat_whitespace();
-                if let Kind::Slash = self.current.kind {
+                if self.current(Kind::Slash).is_ok() {
                     // Self closing.
                     self.advance();
                     self.advance();
@@ -129,6 +135,7 @@ where
                     })
                 } else {
                     // Parse child nodes until we hit the close tag ("</").
+                    self.advance();
                     let mut children = vec![];
                     while !(self.current.kind == Kind::LeftArrow
                         && self.expect(Kind::Slash).is_ok())
@@ -146,11 +153,12 @@ where
                 }
             }
             _ => {
-                let mut text = String::new();
-                while self.expect(Kind::LeftArrow).is_err() && self.peek().is_some() {
+                let mut text = self.current.literal.to_string();
+                while self.expect(Kind::LeftArrow).is_err() {
                     self.advance();
                     text.push(self.current.literal);
                 }
+                self.advance();
                 Ok(Node::Text(text))
             }
         }
@@ -211,7 +219,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     #[test]
-    fn self_closing() {
+    fn tag() {
         let tests = vec![
             (
                 "minimal",
@@ -291,6 +299,86 @@ mod tests {
                     children: vec![],
                 }],
             ),
+            (
+                "full tag, empty",
+                r#"<tag></tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![],
+                }],
+            ),
+            (
+                "text content",
+                r#"<tag>text</tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![Node::Text("text".into())],
+                }],
+            ),
+            (
+                "text content, preserve whitespace padding",
+                r#"<tag>  text  </tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![Node::Text("  text  ".into())],
+                }],
+            ),
+            (
+                "node content, single child",
+                r#"<tag><tag/></tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![Node::Tag {
+                        name: "tag".into(),
+                        attributes: HashMap::new(),
+                        children: vec![],
+                    }],
+                }],
+            ),
+            (
+                "node content, multi child",
+                r#"<tag><tag one="foo"/><tag></tag></tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![
+                        Node::Tag {
+                            name: "tag".into(),
+                            attributes: [("one", "foo")]
+                                .into_iter()
+                                .map(|(k, v)| (k.to_string(), v.to_string()))
+                                .collect(),
+                            children: vec![],
+                        },
+                        Node::Tag {
+                            name: "tag".into(),
+                            attributes: HashMap::new(),
+                            children: vec![],
+                        },
+                    ],
+                }],
+            ),
+            (
+                "node content, nested",
+                r#"<tag><tag><tag>text</tag></tag></tag>"#,
+                vec![Node::Tag {
+                    name: "tag".into(),
+                    attributes: HashMap::new(),
+                    children: vec![Node::Tag {
+                        name: "tag".into(),
+                        attributes: HashMap::new(),
+                        children: vec![Node::Tag {
+                            name: "tag".into(),
+                            attributes: HashMap::new(),
+                            children: vec![Node::Text("text".into())],
+                        }],
+                    }],
+                }],
+            ),
         ];
         for (desc, input, want) in tests {
             let got = Parser::new(Tokenizer::from(input.chars()))
@@ -300,6 +388,4 @@ mod tests {
             assert_eq!(Dom { nodes: want }, got, "{}", desc);
         }
     }
-    #[test]
-    fn full_tag() {}
 }
