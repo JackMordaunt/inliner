@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::iter::Peekable;
 
 // Token is a significant grouping of characters.
@@ -13,7 +14,7 @@ where
 
 #[derive(Debug, PartialEq)]
 pub enum Kind {
-    OpenTag,
+    OpenTag { attributes: HashMap<String, String> },
     CloseTag,
     Text,
 }
@@ -125,8 +126,26 @@ where
                             }
                         });
                     if is_tag {
+                        let attributes: HashMap<String, String> = lit
+                            .trim_start_matches('<')
+                            .trim_start_matches('!')
+                            .trim_end_matches('>')
+                            .trim_end_matches('/')
+                            .split_ascii_whitespace()
+                            .skip(1)
+                            .map(|attr: &str| {
+                                let mut parts = attr.split("=");
+                                let name = parts.next().unwrap();
+                                let value = parts
+                                    .next()
+                                    .unwrap_or("")
+                                    .trim_start_matches('"')
+                                    .trim_end_matches('"');
+                                (name.to_owned(), value.to_owned())
+                            })
+                            .collect();
                         Some(Token {
-                            kind: Kind::OpenTag,
+                            kind: Kind::OpenTag { attributes },
                             literal: lit,
                         })
                     } else {
@@ -150,6 +169,14 @@ where
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+
+    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
     #[test]
     fn tokenizer() {
         let tests = vec![
@@ -158,11 +185,15 @@ mod tests {
                 "<tag/><tag />",
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag/>",
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag />",
                     },
                 ],
@@ -172,7 +203,9 @@ mod tests {
                 "<tag></tag>",
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag>",
                     },
                     Token {
@@ -186,15 +219,21 @@ mod tests {
                 r#"<tag one/><tag one two="two"/><tag one two="two"></tag>"#,
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", "")]),
+                        },
                         literal: r#"<tag one/>"#,
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", ""), ("two", "two")]),
+                        },
                         literal: r#"<tag one two="two"/>"#,
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", ""), ("two", "two")]),
+                        },
                         literal: r#"<tag one two="two">"#,
                     },
                     Token {
@@ -208,15 +247,21 @@ mod tests {
                 r#"<tag one /><tag one two="two" /><tag one two="two" ></tag>"#,
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", "")]),
+                        },
                         literal: r#"<tag one />"#,
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", ""), ("two", "two")]),
+                        },
                         literal: r#"<tag one two="two" />"#,
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: map(&[("one", ""), ("two", "two")]),
+                        },
                         literal: r#"<tag one two="two" >"#,
                     },
                     Token {
@@ -238,7 +283,9 @@ mod tests {
                 "<tag>text</tag><tag> text </tag>",
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag>",
                     },
                     Token {
@@ -250,7 +297,9 @@ mod tests {
                         literal: "</tag>",
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag>",
                     },
                     Token {
@@ -268,7 +317,9 @@ mod tests {
                 "<tag>text<tag/>text<tag>text</tag>text</tag>",
                 vec![
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag>",
                     },
                     Token {
@@ -276,7 +327,9 @@ mod tests {
                         literal: "text",
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag/>",
                     },
                     Token {
@@ -284,7 +337,9 @@ mod tests {
                         literal: "text",
                     },
                     Token {
-                        kind: Kind::OpenTag,
+                        kind: Kind::OpenTag {
+                            attributes: HashMap::new(),
+                        },
                         literal: "<tag>",
                     },
                     Token {
@@ -309,7 +364,9 @@ mod tests {
                 "doctype",
                 "<!DOCTYPE html>",
                 vec![Token {
-                    kind: Kind::OpenTag,
+                    kind: Kind::OpenTag {
+                        attributes: map(&[("html", "")]),
+                    },
                     literal: "<!DOCTYPE html>",
                 }],
             ),
