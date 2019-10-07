@@ -14,8 +14,13 @@ where
 
 #[derive(Debug, PartialEq)]
 pub enum Kind {
-    OpenTag { attributes: HashMap<String, String> },
-    CloseTag,
+    OpenTag {
+        name: String,
+        attributes: HashMap<String, String>,
+    },
+    CloseTag {
+        name: String,
+    },
     Text,
 }
 
@@ -97,43 +102,47 @@ where
             // 3. Text      "if (2 < 3) { }"
             '<' => match self.peek() {
                 // "</" is the start of a close tag.
-                Some('/') => Some(Token {
-                    kind: Kind::CloseTag,
-                    literal: self.collect_including('>'),
-                }),
+                Some('/') => {
+                    let lit = self.collect_including('>');
+                    let name = lit
+                        .trim_start_matches("</")
+                        .trim_end_matches(">")
+                        .to_string();
+                    Some(Token {
+                        kind: Kind::CloseTag { name },
+                        literal: lit,
+                    })
+                }
                 Some(_) => {
                     let lit = self.collect_including('>');
+                    let mut words = lit
+                        .trim_start_matches('<')
+                        .trim_start_matches('!')
+                        .trim_end_matches('>')
+                        .trim_end_matches('/')
+                        .split_whitespace()
+                        .map(String::from)
+                        .collect::<Vec<String>>();
                     // is_tag if there are words that do not contain "=\"", and
                     // also contain non-alphabetic chars.
                     // If the word contains "=\"" we have an attribute value
                     // that can contain arbitrary chars, hence we can't simply
                     // look for non-alphabetic chars.
-                    let is_tag = lit
-                        .trim_start_matches('<')
-                        .trim_start_matches('!') // <!DOCTYPE html>
-                        .trim_end_matches('>')
-                        .trim_end_matches('/') // <tag foo="bar" />
-                        .split_ascii_whitespace()
-                        .fold(true, |is_tag, word| {
-                            if !is_tag {
-                                return false;
-                            }
-                            if !word.contains("=\"") && word.contains(|c: char| !c.is_alphabetic())
-                            {
-                                false
-                            } else {
-                                true
-                            }
-                        });
+                    let is_tag = words.iter().fold(true, |is_tag, word| {
+                        if !is_tag {
+                            return false;
+                        }
+                        if !word.contains("=\"") && word.contains(|c: char| !c.is_alphabetic()) {
+                            false
+                        } else {
+                            true
+                        }
+                    });
                     if is_tag {
-                        let attributes: HashMap<String, String> = lit
-                            .trim_start_matches('<')
-                            .trim_start_matches('!')
-                            .trim_end_matches('>')
-                            .trim_end_matches('/')
-                            .split_ascii_whitespace()
-                            .skip(1)
-                            .map(|attr: &str| {
+                        let mut words = words.drain(..);
+                        let name = words.next().unwrap().to_string();
+                        let attributes: HashMap<String, String> = words
+                            .map(|attr: String| {
                                 let mut parts = attr.split("=");
                                 let name = parts.next().unwrap();
                                 let value = parts
@@ -145,7 +154,7 @@ where
                             })
                             .collect();
                         Some(Token {
-                            kind: Kind::OpenTag { attributes },
+                            kind: Kind::OpenTag { name, attributes },
                             literal: lit,
                         })
                     } else {
@@ -186,12 +195,14 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag/>",
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag />",
@@ -204,12 +215,13 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag>",
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                 ],
@@ -220,24 +232,27 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", "")]),
                         },
                         literal: r#"<tag one/>"#,
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", ""), ("two", "two")]),
                         },
                         literal: r#"<tag one two="two"/>"#,
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", ""), ("two", "two")]),
                         },
                         literal: r#"<tag one two="two">"#,
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                 ],
@@ -248,24 +263,27 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", "")]),
                         },
                         literal: r#"<tag one />"#,
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", ""), ("two", "two")]),
                         },
                         literal: r#"<tag one two="two" />"#,
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: map(&[("one", ""), ("two", "two")]),
                         },
                         literal: r#"<tag one two="two" >"#,
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                 ],
@@ -284,6 +302,7 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag>",
@@ -293,11 +312,12 @@ mod tests {
                         literal: "text",
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag>",
@@ -307,7 +327,7 @@ mod tests {
                         literal: " text ",
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                 ],
@@ -318,6 +338,7 @@ mod tests {
                 vec![
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag>",
@@ -328,6 +349,7 @@ mod tests {
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag/>",
@@ -338,6 +360,7 @@ mod tests {
                     },
                     Token {
                         kind: Kind::OpenTag {
+                            name: "tag".into(),
                             attributes: HashMap::new(),
                         },
                         literal: "<tag>",
@@ -347,7 +370,7 @@ mod tests {
                         literal: "text",
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                     Token {
@@ -355,7 +378,7 @@ mod tests {
                         literal: "text",
                     },
                     Token {
-                        kind: Kind::CloseTag,
+                        kind: Kind::CloseTag { name: "tag".into() },
                         literal: "</tag>",
                     },
                 ],
@@ -365,6 +388,7 @@ mod tests {
                 "<!DOCTYPE html>",
                 vec![Token {
                     kind: Kind::OpenTag {
+                        name: "DOCTYPE".into(),
                         attributes: map(&[("html", "")]),
                     },
                     literal: "<!DOCTYPE html>",
