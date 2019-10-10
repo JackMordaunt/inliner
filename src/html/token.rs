@@ -137,7 +137,7 @@ where
                                         && word
                                             // Ignore bang as a special provision for `<!DOCTYPE>`.
                                             .trim_start_matches('!')
-                                            .contains(|c: char| !c.is_alphabetic())
+                                            .contains(|c: char| !c.is_alphabetic() && c != '-')
                                     {
                                         false
                                     } else {
@@ -278,6 +278,32 @@ mod tests {
     #[test]
     fn tokenizer() {
         let tests = vec![
+            (
+                "tag with hyphenated name",
+                r#"<tag-tag/><tag-tag></tag-tag>"#.trim(),
+                vec![
+                    Token {
+                        kind: Kind::OpenTag {
+                            name: "tag-tag".into(),
+                            attributes: HashMap::new(),
+                        },
+                        literal: "<tag-tag/>",
+                    },
+                    Token {
+                        kind: Kind::OpenTag {
+                            name: "tag-tag".into(),
+                            attributes: HashMap::new(),
+                        },
+                        literal: "<tag-tag>",
+                    },
+                    Token {
+                        kind: Kind::CloseTag {
+                            name: "tag-tag".into(),
+                        },
+                        literal: "</tag-tag>",
+                    },
+                ],
+            ),
             (
                 "self closing tag",
                 "<first/>text<second />",
