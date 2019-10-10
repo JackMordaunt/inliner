@@ -58,31 +58,6 @@ where
             source: self.peekable(),
         }
     }
-    // collect chars into a string buffer until the needle is found.
-    // The buffer will contain the needle.
-    fn collect_including(&mut self, needle: char) -> String {
-        let mut buffer: String = self.current.to_string();
-        while self.advance() {
-            buffer.push(self.current);
-            if self.current == needle {
-                break;
-            }
-        }
-        self.advance();
-        buffer
-    }
-    // collect chars into a string buffer until the needle is found.
-    // The buffer will not include the needle.
-    fn collect_until(&mut self, needle: char) -> String {
-        let mut buffer: String = self.current.to_string();
-        while self.advance() {
-            if self.current == needle {
-                break;
-            }
-            buffer.push(self.current);
-        }
-        buffer
-    }
     // advance the current token, returning false if there are no more values.
     fn advance(&mut self) -> bool {
         if let Some(c) = self.source.next() {
