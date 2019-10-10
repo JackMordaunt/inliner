@@ -10,7 +10,7 @@ use token::Tokenizer;
 /// document.
 /// Input must be valid html, and can be unformatted.
 pub fn inline(input: &str) -> Result<String, Box<dyn Error>> {
-    Ok(Parser::new(Tokenizer::new(input.chars()).merged())?
+    Ok(Parser::new(Tokenizer::new(input.chars()).merged())
         .parse()?
         .to_string())
 }

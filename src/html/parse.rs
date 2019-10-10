@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::fmt;
 use std::iter::Peekable;
 
-use super::token::{Kind, Token};
+use super::token::{self, Kind};
+
+type Token = token::Token<String, String>;
 
 #[derive(Debug, PartialEq)]
 pub struct Dom {
@@ -17,7 +19,16 @@ pub enum Node {
         attributes: HashMap<String, String>,
         children: Vec<Node>,
     },
-    DocType,
+}
+
+impl Node {
+    fn self_closing(name: String, attributes: HashMap<String, String>) -> Self {
+        Node::Tag {
+            name: name,
+            attributes: attributes,
+            children: vec![],
+        }
+    }
 }
 
 /// Parser maintains state required for parsing.
@@ -27,167 +38,91 @@ where
     Src: Iterator<Item = Token>,
 {
     source: Peekable<Src>,
-    current: Token,
 }
 
 impl<Src> Parser<Src>
 where
     Src: Iterator<Item = Token>,
 {
-    pub fn new(source: Src) -> Result<Self, String> {
-        let mut source = source.peekable();
-        let current = match source.next() {
-            Some(c) => c,
-            None => return Err("source is empty".to_owned()),
-        };
-        Ok(Parser { current, source })
+    pub fn new(source: Src) -> Self {
+        Parser {
+            source: source.peekable(),
+        }
     }
     pub fn parse(&mut self) -> Result<Dom, String> {
         let mut nodes: Vec<Node> = vec![];
-        while let Some(_) = self.peek() {
-            nodes.push(self.parse_node()?);
+        while let Some(token) = self.source.next() {
+            if let Some(node) = self.parse_node(token)? {
+                nodes.extend(node);
+            }
         }
         Ok(Dom { nodes })
     }
-    fn advance(&mut self) {
-        if let Some(tok) = self.source.next() {
-            self.current = tok;
-        }
-    }
-    fn peek(&mut self) -> Option<&Token> {
-        self.source.peek()
-    }
-    fn expect(&mut self, kind: Kind) -> Result<(), String> {
-        match self.peek() {
-            None => Err(format!("unexpected end of input")),
-            Some(tok) => {
-                if tok.kind != kind {
-                    Err(format!("expected {:?}, got {:?}", kind, tok))
-                } else {
-                    Ok(())
-                }
-            }
-        }
-    }
-    fn current(&mut self, kind: Kind) -> Result<(), String> {
-        if self.current.kind == kind {
-            Ok(())
-        } else {
-            Err(format!("expected {:?}, got {:?}", kind, self.current))
-        }
-    }
-    fn eat_whitespace(&mut self) {
-        while self.current(Kind::WhiteSpace).is_ok() && self.peek().is_some() {
-            self.advance();
-        }
-    }
-    fn parse_node(&mut self) -> Result<Node, String> {
-        match self.current.kind {
-            Kind::LeftArrow => {
-                let mut tag = String::new();
-                // Parse tag name.
-                while self.expect(Kind::Text).is_ok() {
-                    self.advance();
-                    tag.push(self.current.literal);
-                }
-                self.advance();
-                if tag.starts_with('!') {
-                    while self.current(Kind::RightArrow).is_err() {
-                        self.advance();
-                    }
-                    self.advance();
-                    return Ok(Node::DocType);
-                }
-                self.eat_whitespace();
-                let mut attributes = HashMap::new();
-                if self.current(Kind::RightArrow).is_err() {
-                    while self.expect(Kind::RightArrow).is_err()
-                        && self.expect(Kind::Slash).is_err()
-                    {
-                        self.eat_whitespace();
-                        // Parse attributes.
-                        let mut attr = self.current.literal.to_string();
-                        while self.expect(Kind::Text).is_ok() {
-                            self.advance();
-                            attr.push(self.current.literal);
-                        }
-                        self.advance();
-                        if !attr.is_empty() {
-                            // Check for value.
-                            if self.current(Kind::Equal).is_ok() && self.expect(Kind::Quote).is_ok()
-                            {
-                                self.advance();
-                                let mut value = String::new();
-                                while self.expect(Kind::Quote).is_err() {
-                                    self.advance();
-                                    value.push(self.current.literal);
-                                }
-                                self.advance(); // onto quote
-                                                // self.advance(); // onto >
-                                                // self.advance(); // onto <
 
-                                attributes.insert(attr, value);
-                            } else {
-                                attributes.insert(attr, "".to_string());
-                            }
-                        }
-                    }
-                }
-                self.eat_whitespace();
-                if self.current(Kind::Slash).is_ok() {
-                    // Self closing.
-                    self.advance();
-                    self.advance();
-                    Ok(Node::Tag {
-                        name: tag,
-                        attributes: attributes,
-                        children: vec![],
-                    })
+    fn parse_node(&mut self, current: Token) -> Result<Option<Vec<Node>>, String> {
+        match current.kind {
+            Kind::Text(text) => {
+                let text = text.trim();
+                if !text.is_empty() {
+                    Ok(Some(vec![Node::Text(text.to_owned())]))
                 } else {
-                    // Parse child nodes until we hit the close tag ("</").
-                    // self.advance();
-                    // self.advance();
-                    let mut children = vec![];
-                    // Handle script tag which cannot have node children.
-                    if tag == "script" {
-                        let mut text = String::new();
-                        while !(self.current(Kind::LeftArrow).is_ok()
-                            && self.expect(Kind::Slash).is_ok())
-                        {
-                            text.push(self.current.literal);
-                            self.advance();
-                        }
-                        self.advance();
-                        if !text.is_empty() {
-                            children.push(Node::Text(text));
-                        }
-                    } else {
-                        while !(self.current(Kind::LeftArrow).is_ok()
-                            && self.expect(Kind::Slash).is_ok())
-                        {
-                            children.push(self.parse_node()?);
-                        }
-                    }
-                    for _ in 0..tag.len() + 3 {
-                        self.advance();
-                    }
-                    Ok(Node::Tag {
-                        name: tag,
-                        attributes: attributes,
-                        children: children,
-                    })
+                    Ok(None)
                 }
             }
-            _ => {
-                let mut text = self.current.literal.to_string();
-                // FIXME: Allow for left arrow to appear in text if followed by
-                // whitespace.
-                while self.expect(Kind::LeftArrow).is_err() {
-                    self.advance();
-                    text.push(self.current.literal);
+            Kind::CloseTag { name } => Err(format!("unexpected close tag: </{}>", name)),
+            Kind::OpenTag {
+                name: open_name,
+                attributes,
+            } => {
+                let is_self_closing = current.literal.ends_with("/>");
+                if is_self_closing {
+                    Ok(Some(vec![Node::self_closing(open_name, attributes)]))
+                } else {
+                    let mut nodes: Vec<Node> = vec![];
+                    while let Some(token) = self.source.next() {
+                        match token.kind {
+                            Kind::CloseTag { name: close_name } => {
+                                // If we encounter a close tag that doesn't
+                                // match the open tag, then we have an unclosed
+                                // tag. Thus the currently parsed nodes are
+                                // siblings, not children.
+                                if open_name != close_name {
+                                    return Ok(Some(
+                                        vec![Node::Tag {
+                                            name: open_name,
+                                            attributes: attributes,
+                                            children: vec![],
+                                        }]
+                                        .into_iter()
+                                        .chain(nodes.drain(..))
+                                        .collect(),
+                                    ));
+                                } else {
+                                    return Ok(Some(vec![Node::Tag {
+                                        name: open_name,
+                                        attributes: attributes,
+                                        children: nodes.drain(..).collect(),
+                                    }]));
+                                }
+                            }
+                            _ => {
+                                // We say this node is likely a child.
+                                if let Some(n) = self.parse_node(token)? {
+                                    nodes.extend(n);
+                                }
+                            }
+                        };
+                    }
+                    // So, are the nodes children or siblings?
+                    // How to tell? They are siblings IF there is no
+                    // corresponding close tag.
+                    println!("children {:?}", nodes);
+                    return Ok(Some(vec![Node::Tag {
+                        name: open_name,
+                        attributes: attributes,
+                        children: nodes.drain(..).collect(),
+                    }]));
                 }
-                self.advance();
-                Ok(Node::Text(text))
             }
         }
     }
@@ -211,7 +146,6 @@ impl fmt::Display for Node {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             Node::Text(text) => write!(f, "{}", text),
-            Node::DocType => write!(f, "<!DOCTYPE html>"),
             Node::Tag {
                 name,
                 attributes,
@@ -247,9 +181,48 @@ mod tests {
     use super::super::Tokenizer;
     use super::*;
     use pretty_assertions::assert_eq;
+    enum Error {
+        Yes,
+        No,
+    }
     #[test]
-    fn tag() {
+    fn parser() {
         let tests = vec![
+            (
+                "tag mismatch, close tag without coresponding open tag",
+                r#"
+                <outer>
+                    text
+                    </inner>
+                </outer>
+                "#
+                .trim(),
+                vec![],
+                Error::Yes,
+            ),
+            (
+                "tag mismatch, open tag without coresponding close tag",
+                r#"
+                <outer>
+                    <inner>
+                    text
+                </outer>
+                "#
+                .trim(),
+                vec![Node::Tag {
+                    name: "outer".into(),
+                    attributes: HashMap::new(),
+                    children: vec![
+                        Node::Tag {
+                            name: "inner".into(),
+                            attributes: HashMap::new(),
+                            children: vec![],
+                        },
+                        Node::Text("text".into()),
+                    ],
+                }],
+                Error::No,
+            ),
             (
                 "script containing left arrow",
                 r#"<script>if (1 < 2) {alert("hi");}</script>"#,
@@ -258,6 +231,7 @@ mod tests {
                     attributes: HashMap::new(),
                     children: vec![Node::Text(r#"if (1 < 2) {alert("hi");}"#.into())],
                 }],
+                Error::No,
             ),
             (
                 "minimal",
@@ -267,6 +241,7 @@ mod tests {
                     attributes: HashMap::new(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "minimal, space after tag name",
@@ -276,6 +251,7 @@ mod tests {
                     attributes: HashMap::new(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "boolean attributes",
@@ -288,6 +264,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "boolean attributes, multiple spaces between",
@@ -300,6 +277,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "boolean attributes, space after last attribute",
@@ -312,6 +290,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "value attributes, space after last attribute",
@@ -324,6 +303,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "value attributes, self closing",
@@ -336,6 +316,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "value attributes, not self closing",
@@ -348,6 +329,7 @@ mod tests {
                         .collect(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "full tag, empty",
@@ -357,6 +339,7 @@ mod tests {
                     attributes: HashMap::new(),
                     children: vec![],
                 }],
+                Error::No,
             ),
             (
                 "text content",
@@ -366,15 +349,17 @@ mod tests {
                     attributes: HashMap::new(),
                     children: vec![Node::Text("text".into())],
                 }],
+                Error::No,
             ),
             (
-                "text content, preserve whitespace padding",
+                "text content, trim whitespace padding",
                 r#"<tag>  text  </tag>"#,
                 vec![Node::Tag {
                     name: "tag".into(),
                     attributes: HashMap::new(),
-                    children: vec![Node::Text("  text  ".into())],
+                    children: vec![Node::Text("text".into())],
                 }],
+                Error::No,
             ),
             (
                 "node content, single child",
@@ -388,10 +373,17 @@ mod tests {
                         children: vec![],
                     }],
                 }],
+                Error::No,
             ),
             (
                 "node content, multi child",
-                r#"<tag><tag one="foo"/><tag></tag></tag>"#,
+                r#"
+                <tag>
+                    <tag one="foo"/>
+                    <tag>text</tag>
+                </tag>
+                "#
+                .trim(),
                 vec![Node::Tag {
                     name: "tag".into(),
                     attributes: HashMap::new(),
@@ -407,10 +399,11 @@ mod tests {
                         Node::Tag {
                             name: "tag".into(),
                             attributes: HashMap::new(),
-                            children: vec![],
+                            children: vec![Node::Text("text".into())],
                         },
                     ],
                 }],
+                Error::No,
             ),
             (
                 "node content, nested",
@@ -428,15 +421,35 @@ mod tests {
                         }],
                     }],
                 }],
+                Error::No,
             ),
-            ("doctype", r#"<!DOCTYPE html>"#, vec![Node::DocType]),
+            (
+                "doctype",
+                r#"<!DOCTYPE html>"#,
+                vec![Node::Tag {
+                    name: "!DOCTYPE".into(),
+                    attributes: [("html", "")]
+                        .into_iter()
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect(),
+                    children: vec![],
+                }],
+                Error::No,
+            ),
         ];
-        for (desc, input, want) in tests {
-            let got = Parser::new(Tokenizer::from(input.chars()))
-                .unwrap()
-                .parse()
-                .unwrap();
-            assert_eq!(Dom { nodes: want }, got, "{}", desc);
+        for (desc, input, want, err) in tests {
+            let got = Parser::new(Tokenizer::new(input.chars()).merged()).parse();
+            match err {
+                Error::Yes => {
+                    if let Ok(got) = got {
+                        assert_eq!(Dom { nodes: want }, got, "{}: wanted error, got none", desc);
+                    }
+                }
+                Error::No => match got {
+                    Ok(got) => assert_eq!(Dom { nodes: want }, got, "{}", desc),
+                    Err(err) => panic!("unexpected error: {:?}", err),
+                },
+            };
         }
     }
 }
