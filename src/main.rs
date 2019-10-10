@@ -1,5 +1,6 @@
 mod html;
 
+use html::{Node, Parser, Tokenizer};
 use std::fs;
 use std::io::prelude::*;
 
@@ -24,7 +25,7 @@ fn main() {
             return;
         }
     };
-    let inlined_html = match html::inline(&input) {
+    let inlined_html = match inline(input.drain(..)) {
         Ok(doc) => doc,
         Err(err) => {
             eprintln!("error: inlining html: {}", err);
@@ -35,4 +36,15 @@ fn main() {
         eprintln!("error: writing to stdout: {}", err);
         return;
     };
+}
+
+fn inline<Chars>(stream: Chars) -> Result<String, String>
+where
+    Chars: Iterator<Item = char>,
+{
+    // let mut dom = Parser::new(Tokenizer::new(stream).merged()).parse()?;
+    // for node in dom.filter(|n: &Node| n.attr("src").is_ok() || n.attr("href").is_ok()) {
+
+    // }
+    unimplemented!()
 }
