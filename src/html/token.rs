@@ -117,7 +117,6 @@ where
                         } else {
                             let mut words = buffer
                                 .trim_start_matches('<')
-                                .trim_start_matches('!')
                                 .trim_start_matches('/')
                                 .trim_end_matches('>')
                                 .trim_end_matches('/')
@@ -135,7 +134,10 @@ where
                                         return false;
                                     }
                                     if !word.contains("=\"")
-                                        && word.contains(|c: char| !c.is_alphabetic())
+                                        && word
+                                            // Ignore bang as a special provision for `<!DOCTYPE>`.
+                                            .trim_start_matches('!')
+                                            .contains(|c: char| !c.is_alphabetic())
                                     {
                                         false
                                     } else {
@@ -479,7 +481,7 @@ mod tests {
                 "<!DOCTYPE html>",
                 vec![Token {
                     kind: Kind::OpenTag {
-                        name: "DOCTYPE".into(),
+                        name: "!DOCTYPE".into(),
                         attributes: map(&[("html", "")]),
                     },
                     literal: "<!DOCTYPE html>",
