@@ -1,27 +1,32 @@
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::iter::Peekable;
 
 // Token is a significant grouping of characters.
 // Token literal is generic over anything that can be represented as a string.
 #[derive(Debug, PartialEq, Clone)]
-pub struct Token<L>
+pub struct Token<K, L>
 where
-    L: AsRef<str>,
+    K: Borrow<str>,
+    L: Borrow<str>,
 {
-    pub kind: Kind,
+    pub kind: Kind<K>,
     pub literal: L,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Kind {
+pub enum Kind<K>
+where
+    K: Borrow<str>,
+{
     OpenTag {
-        name: String,
-        attributes: HashMap<String, String>,
+        name: K,
+        attributes: HashMap<String, K>,
     },
     CloseTag {
-        name: String,
+        name: K,
     },
-    Text(String),
+    Text(K),
 }
 
 /// Tokenizer converts a char stream into a token stream.
@@ -31,7 +36,7 @@ where
 {
     source: Peekable<Src>,
     current: char,
-    buffer: Vec<Token<String>>,
+    buffer: Vec<Token<String, String>>,
     stack: Vec<char>,
 }
 
@@ -97,7 +102,7 @@ impl<Src> Iterator for Tokenizer<Src>
 where
     Src: Iterator<Item = char>,
 {
-    type Item = Token<String>;
+    type Item = Token<String, String>;
 
     /// next returns the next xml token in the sequence.
     ///
@@ -217,16 +222,16 @@ where
 /// TextMerger merges adjacent Text Tokens into one Text Token.
 pub struct TextMerger<Src>
 where
-    Src: Iterator<Item = Token<String>>,
+    Src: Iterator<Item = Token<String, String>>,
 {
     source: Peekable<Src>,
 }
 
 impl<Src> Iterator for TextMerger<Src>
 where
-    Src: Iterator<Item = Token<String>>,
+    Src: Iterator<Item = Token<String, String>>,
 {
-    type Item = Token<String>;
+    type Item = Token<String, String>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.source.next() {
             Some(Token {
@@ -259,16 +264,38 @@ where
     }
 }
 
+impl<K, L> Token<K, L>
+where
+    K: Borrow<str>,
+    L: Borrow<str>,
+{
+    pub fn to_owned(&self) -> Token<String, String> {
+        Token {
+            kind: match &self.kind {
+                Kind::OpenTag { name, attributes } => Kind::OpenTag {
+                    name: name.borrow().to_string(),
+                    attributes: attributes
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), v.borrow().to_string()))
+                        .collect(),
+                },
+                Kind::CloseTag { name } => Kind::CloseTag {
+                    name: name.borrow().to_string(),
+                },
+                Kind::Text(text) => Kind::Text(text.borrow().to_string()),
+            },
+            literal: self.literal.borrow().to_string(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    fn map(pairs: &[(&str, &str)]) -> HashMap<String, String> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
+    fn map<'a>(pairs: &[(&str, &'a str)]) -> HashMap<String, &'a str> {
+        pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
     }
 
     #[test]
@@ -500,8 +527,6 @@ mod tests {
                 }],
             ),
             (
-                // FIXME: Fails.
-                // Includes close tag as part of the text token.
                 "script containing left arrow",
                 r#"<script>if (1 < 2) {alert("hi");}if (1 < 2) {alert("hi");}</script>"#,
                 vec![
@@ -551,14 +576,8 @@ mod tests {
             ),
         ];
         for (desc, input, want) in tests {
-            let got: Vec<Token<String>> = Tokenizer::new(input.chars()).merged().collect();
-            let want = want
-                .into_iter()
-                .map(|tok: Token<&str>| Token {
-                    literal: tok.literal.to_owned(),
-                    kind: tok.kind,
-                })
-                .collect::<Vec<Token<String>>>();
+            let got: Vec<Token<_, _>> = Tokenizer::new(input.chars()).merged().collect();
+            let want: Vec<Token<_, _>> = want.into_iter().map(|t| t.to_owned()).collect();
             assert_eq!(want, got, "{}", desc,);
         }
     }
