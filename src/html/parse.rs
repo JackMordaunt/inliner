@@ -1,24 +1,65 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::error::Error;
 use std::fmt;
 use std::iter::Peekable;
+use std::rc::Rc;
 
 use super::token::{self, Kind};
 
+/// NodeRef is used for interior mutability, enabling mutations of the DOM
+/// during traversal.
+pub type NodeRef = Rc<RefCell<Node>>;
 type Token = token::Token<String, String>;
 
+/// Dom is a simple wrapper over the root level Nodes.
 #[derive(Debug, PartialEq)]
 pub struct Dom {
-    nodes: Vec<Node>,
+    pub nodes: Vec<NodeRef>,
 }
 
+/// Node defines what data can appear in the DOM tree.
 #[derive(Debug, PartialEq)]
 pub enum Node {
     Text(String),
     Tag {
         name: String,
         attributes: HashMap<String, String>,
-        children: Vec<Node>,
+        children: Vec<NodeRef>,
     },
+}
+
+/// Parser maintains state required for parsing.
+#[derive(Debug)]
+pub struct Parser<Src>
+where
+    Src: Iterator<Item = Token>,
+{
+    source: Peekable<Src>,
+}
+
+impl Dom {
+    /// depth_first recursively walks the DOM depth_first, applying `cb` on
+    /// every Node.
+    /// Errors in the callback will bubble up here so the caller can access it.
+    pub fn depth_first<F>(&self, cb: &F) -> Result<(), Box<dyn Error>>
+    where
+        F: Fn(NodeRef) -> Result<(), Box<dyn Error>>,
+    {
+        Dom::visit_notes(&self.nodes, cb)
+    }
+    fn visit_notes<F>(nodes: &[NodeRef], cb: &F) -> Result<(), Box<dyn Error>>
+    where
+        F: Fn(NodeRef) -> Result<(), Box<dyn Error>>,
+    {
+        for node in nodes {
+            cb(node.clone())?;
+            if let Node::Tag { children, .. } = &*node.borrow() {
+                Dom::visit_notes(children, cb)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Node {
@@ -31,15 +72,6 @@ impl Node {
     }
 }
 
-/// Parser maintains state required for parsing.
-#[derive(Debug)]
-pub struct Parser<Src>
-where
-    Src: Iterator<Item = Token>,
-{
-    source: Peekable<Src>,
-}
-
 impl<Src> Parser<Src>
 where
     Src: Iterator<Item = Token>,
@@ -49,8 +81,10 @@ where
             source: source.peekable(),
         }
     }
+
+    /// parse the token stream into a DOM tree.
     pub fn parse(&mut self) -> Result<Dom, String> {
-        let mut nodes: Vec<Node> = vec![];
+        let mut nodes: Vec<NodeRef> = vec![];
         while let Some(token) = self.source.next() {
             if let Some(node) = self.parse_node(token)? {
                 nodes.extend(node);
@@ -59,12 +93,14 @@ where
         Ok(Dom { nodes })
     }
 
-    fn parse_node(&mut self, current: Token) -> Result<Option<Vec<Node>>, String> {
+    // parse_node recursively parses `Node` objects in depth first order.
+    // Extremely nested input could overflow the stack.
+    fn parse_node(&mut self, current: Token) -> Result<Option<Vec<NodeRef>>, String> {
         match current.kind {
             Kind::Text(text) => {
                 let text = text.trim();
                 if !text.is_empty() {
-                    Ok(Some(vec![Node::Text(text.to_owned())]))
+                    Ok(Some(vec![Node::Text(text.to_owned()).into()]))
                 } else {
                     Ok(None)
                 }
@@ -76,52 +112,60 @@ where
             } => {
                 let is_self_closing = current.literal.ends_with("/>");
                 if is_self_closing {
-                    Ok(Some(vec![Node::self_closing(open_name, attributes)]))
+                    Ok(Some(vec![Node::self_closing(open_name, attributes).into()]))
                 } else {
-                    let mut nodes: Vec<Node> = vec![];
-                    while let Some(token) = self.source.next() {
-                        match token.kind {
+                    let mut siblings: Vec<NodeRef> = vec![];
+                    while let Some(token) = self.source.peek() {
+                        match &token.kind {
                             Kind::CloseTag { name: close_name } => {
                                 // If we encounter a close tag that doesn't
                                 // match the open tag, then we have an unclosed
                                 // tag. Thus the currently parsed nodes are
                                 // siblings, not children.
-                                if open_name != close_name {
+                                if open_name != *close_name {
                                     return Ok(Some(
                                         vec![Node::Tag {
                                             name: open_name,
                                             attributes: attributes,
                                             children: vec![],
-                                        }]
+                                        }
+                                        .into()]
                                         .into_iter()
-                                        .chain(nodes.drain(..))
+                                        .chain(siblings.drain(..))
                                         .collect(),
                                     ));
                                 } else {
+                                    self.source.next();
                                     return Ok(Some(vec![Node::Tag {
                                         name: open_name,
                                         attributes: attributes,
-                                        children: nodes.drain(..).collect(),
-                                    }]));
+                                        children: siblings,
+                                    }
+                                    .into()]));
                                 }
                             }
                             _ => {
-                                // We say this node is likely a child.
-                                if let Some(n) = self.parse_node(token)? {
-                                    nodes.extend(n);
+                                if let Some(token) = self.source.next() {
+                                    if let Some(n) = self.parse_node(token)? {
+                                        siblings.extend(n);
+                                    }
                                 }
                             }
                         };
                     }
-                    // So, are the nodes children or siblings?
-                    // How to tell? They are siblings IF there is no
-                    // corresponding close tag.
-                    println!("children {:?}", nodes);
-                    return Ok(Some(vec![Node::Tag {
-                        name: open_name,
-                        attributes: attributes,
-                        children: nodes.drain(..).collect(),
-                    }]));
+                    // Ran out of input before finding a close tag, so this node
+                    // must be a sibling of the buffered nodes.
+                    return Ok(Some(
+                        vec![Node::Tag {
+                            name: open_name,
+                            attributes: attributes,
+                            children: vec![],
+                        }
+                        .into()]
+                        .into_iter()
+                        .chain(siblings.drain(..))
+                        .collect(),
+                    ));
                 }
             }
         }
@@ -133,11 +177,14 @@ impl fmt::Display for Dom {
         write!(
             f,
             "{}",
-            self.nodes
-                .iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<String>>()
-                .join("\n")
+            self.nodes.iter().map(|n| n.borrow().to_string()).fold(
+                String::new(),
+                |mut acc, next| {
+                    acc.extend(next.chars());
+                    acc.push('\n');
+                    acc
+                }
+            )
         )
     }
 }
@@ -154,25 +201,59 @@ impl fmt::Display for Node {
                 if children.is_empty() {
                     write!(
                         f,
-                        "<{tag} {attributes}/>",
+                        "<{tag}{attributes}/>",
                         tag = name,
-                        attributes = format!("{:?}", attributes)
+                        attributes = attributes
+                            .iter()
+                            .map(|(k, v)| if !v.is_empty() {
+                                format!("{}=\"{}\"", k, v)
+                            } else {
+                                format!("{}", k)
+                            })
+                            .fold(String::new(), |mut acc, next| {
+                                acc.push(' ');
+                                acc.extend(next.chars());
+                                acc
+                            })
+                            .trim_end()
                     )
                 } else {
                     write!(
                         f,
-                        "<{tag} {attributes}>{children}</{tag}>",
+                        "<{tag}{attributes}>{children}</{tag}>",
                         tag = name,
-                        attributes = format!("{:?}", attributes),
+                        attributes = attributes
+                            .iter()
+                            .map(|(k, v)| if !v.is_empty() {
+                                format!("{}=\"{}\"", k, v)
+                            } else {
+                                format!("{}", k)
+                            })
+                            .fold(String::new(), |mut acc, next| {
+                                acc.push(' ');
+                                acc.extend(next.chars());
+                                acc
+                            })
+                            .trim_end(),
                         children = children
                             .iter()
-                            .map(|n| n.to_string())
-                            .collect::<Vec<String>>()
-                            .join(" ")
+                            .map(|n| n.borrow().to_string())
+                            .fold(String::new(), |mut acc, next| {
+                                acc.push(' ');
+                                acc.extend(next.chars());
+                                acc
+                            })
+                            .trim_end()
                     )
                 }
             }
         }
+    }
+}
+
+impl Into<NodeRef> for Node {
+    fn into(self) -> NodeRef {
+        Rc::new(RefCell::new(self))
     }
 }
 
@@ -201,6 +282,9 @@ mod tests {
                 Error::Yes,
             ),
             (
+                // Fail symptom: Open tag without flatten into a list of siblings.
+                // I think this is because we consume the </outer> when comparing it with <inner>
+                // which means the <outer> reaches end of input and is considered an open tag without a close tag.
                 "tag mismatch, open tag without coresponding close tag",
                 r#"
                 <outer>
@@ -217,8 +301,9 @@ mod tests {
                             name: "inner".into(),
                             attributes: HashMap::new(),
                             children: vec![],
-                        },
-                        Node::Text("text".into()),
+                        }
+                        .into(),
+                        Node::Text("text".into()).into(),
                     ],
                 }],
                 Error::No,
@@ -229,7 +314,7 @@ mod tests {
                 vec![Node::Tag {
                     name: "script".into(),
                     attributes: HashMap::new(),
-                    children: vec![Node::Text(r#"if (1 < 2) {alert("hi");}"#.into())],
+                    children: vec![Node::Text(r#"if (1 < 2) {alert("hi");}"#.into()).into()],
                 }],
                 Error::No,
             ),
@@ -347,7 +432,7 @@ mod tests {
                 vec![Node::Tag {
                     name: "tag".into(),
                     attributes: HashMap::new(),
-                    children: vec![Node::Text("text".into())],
+                    children: vec![Node::Text("text".into()).into()],
                 }],
                 Error::No,
             ),
@@ -357,7 +442,7 @@ mod tests {
                 vec![Node::Tag {
                     name: "tag".into(),
                     attributes: HashMap::new(),
-                    children: vec![Node::Text("text".into())],
+                    children: vec![Node::Text("text".into()).into()],
                 }],
                 Error::No,
             ),
@@ -371,7 +456,8 @@ mod tests {
                         name: "tag".into(),
                         attributes: HashMap::new(),
                         children: vec![],
-                    }],
+                    }
+                    .into()],
                 }],
                 Error::No,
             ),
@@ -395,12 +481,14 @@ mod tests {
                                 .map(|(k, v)| (k.to_string(), v.to_string()))
                                 .collect(),
                             children: vec![],
-                        },
+                        }
+                        .into(),
                         Node::Tag {
                             name: "tag".into(),
                             attributes: HashMap::new(),
-                            children: vec![Node::Text("text".into())],
-                        },
+                            children: vec![Node::Text("text".into()).into()],
+                        }
+                        .into(),
                     ],
                 }],
                 Error::No,
@@ -417,14 +505,16 @@ mod tests {
                         children: vec![Node::Tag {
                             name: "tag".into(),
                             attributes: HashMap::new(),
-                            children: vec![Node::Text("text".into())],
-                        }],
-                    }],
+                            children: vec![Node::Text("text".into()).into()],
+                        }
+                        .into()],
+                    }
+                    .into()],
                 }],
                 Error::No,
             ),
             (
-                "doctype",
+                "doctype: first tag is an open tag without a close tag",
                 r#"<!DOCTYPE html>"#,
                 vec![Node::Tag {
                     name: "!DOCTYPE".into(),
@@ -436,13 +526,47 @@ mod tests {
                 }],
                 Error::No,
             ),
+            (
+                // Fail: Open tag without close tag fails when part of the document root.
+                // Symptom: Following tag becomes child instead of sibling.
+                "doctype: first tag is an open tag without a close tag",
+                r#"
+                <!DOCTYPE html>
+                <html>
+                    <body>
+                    </body>
+                </html>
+                "#,
+                vec![
+                    Node::Tag {
+                        name: "!DOCTYPE".into(),
+                        attributes: [("html", "")]
+                            .into_iter()
+                            .map(|(k, v)| (k.to_string(), v.to_string()))
+                            .collect(),
+                        children: vec![],
+                    },
+                    Node::Tag {
+                        name: "html".into(),
+                        attributes: HashMap::new(),
+                        children: vec![Node::Tag {
+                            name: "body".into(),
+                            attributes: HashMap::new(),
+                            children: vec![],
+                        }
+                        .into()],
+                    },
+                ],
+                Error::No,
+            ),
         ];
-        for (desc, input, want, err) in tests {
+        for (desc, input, mut want, err) in tests {
             let got = Parser::new(Tokenizer::new(input.chars()).merged()).parse();
+            let want = want.drain(..).map(Into::into).collect();
             match err {
                 Error::Yes => {
                     if let Ok(got) = got {
-                        assert_eq!(Dom { nodes: want }, got, "{}: wanted error, got none", desc);
+                        assert_eq!(Dom { nodes: want }, got, "{}: wanted error, got none", desc,);
                     }
                 }
                 Error::No => match got {
