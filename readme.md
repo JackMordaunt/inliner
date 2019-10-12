@@ -4,7 +4,7 @@
 
 `inliner` is expected to be used with a build script that produces optimized
 output, such as `yarn build`. Optimizing `css` and `js` and fetching remote
-resources is outside the scope of this library - at least for now.
+resources is outside the scope of this tool - at least for now.
 
 ## Features
 
