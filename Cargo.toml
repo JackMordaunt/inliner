@@ -9,3 +9,5 @@ edition = "2018"
 [dependencies]
 base64 = "0.10.1"
 pretty_assertions = "0.6.1"
+mime_guess = "2.0.1"
+clap = "2.33.0"
