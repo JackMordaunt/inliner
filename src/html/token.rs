@@ -35,9 +35,7 @@ where
     Src: Iterator<Item = char>,
 {
     source: Peekable<Src>,
-    current: char,
     buffer: Vec<Token<String, String>>,
-    stack: Vec<char>,
 }
 
 impl<Src> Tokenizer<Src>
@@ -47,9 +45,7 @@ where
     pub fn new(source: Src) -> Self {
         Tokenizer {
             source: source.peekable(),
-            current: '0',
             buffer: vec![],
-            stack: vec![],
         }
     }
     /// merged adapts Tokenizer to an iterator that merges adjacent text tokens.
@@ -57,19 +53,6 @@ where
         TextMerger {
             source: self.peekable(),
         }
-    }
-    // advance the current token, returning false if there are no more values.
-    fn advance(&mut self) -> bool {
-        if let Some(c) = self.source.next() {
-            self.current = c;
-            true
-        } else {
-            false
-        }
-    }
-    // peek the next token without advancing to it.
-    fn peek(&mut self) -> Option<&char> {
-        self.source.peek()
     }
 }
 
@@ -241,31 +224,6 @@ where
     }
 }
 
-impl<K, L> Token<K, L>
-where
-    K: Borrow<str>,
-    L: Borrow<str>,
-{
-    pub fn to_owned(&self) -> Token<String, String> {
-        Token {
-            kind: match &self.kind {
-                Kind::OpenTag { name, attributes } => Kind::OpenTag {
-                    name: name.borrow().to_string(),
-                    attributes: attributes
-                        .iter()
-                        .map(|(k, v)| (k.to_string(), v.borrow().to_string()))
-                        .collect(),
-                },
-                Kind::CloseTag { name } => Kind::CloseTag {
-                    name: name.borrow().to_string(),
-                },
-                Kind::Text(text) => Kind::Text(text.borrow().to_string()),
-            },
-            literal: self.literal.borrow().to_string(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +231,31 @@ mod tests {
 
     fn map<'a>(pairs: &[(&str, &'a str)]) -> HashMap<String, &'a str> {
         pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect()
+    }
+
+    impl<K, L> Token<K, L>
+    where
+        K: Borrow<str>,
+        L: Borrow<str>,
+    {
+        fn to_owned(&self) -> Token<String, String> {
+            Token {
+                kind: match &self.kind {
+                    Kind::OpenTag { name, attributes } => Kind::OpenTag {
+                        name: name.borrow().to_string(),
+                        attributes: attributes
+                            .iter()
+                            .map(|(k, v)| (k.to_string(), v.borrow().to_string()))
+                            .collect(),
+                    },
+                    Kind::CloseTag { name } => Kind::CloseTag {
+                        name: name.borrow().to_string(),
+                    },
+                    Kind::Text(text) => Kind::Text(text.borrow().to_string()),
+                },
+                literal: self.literal.borrow().to_string(),
+            }
+        }
     }
 
     #[test]
