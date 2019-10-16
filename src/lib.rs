@@ -1,2 +1,4 @@
 pub mod html;
-pub mod inline;
+mod inline;
+
+pub use inline::inline;
